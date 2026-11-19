@@ -74,4 +74,46 @@ Pass project-wide mutation IDs to `packs.get_changer(source, ignored=ids)`. For 
 standalone pack, use `Changer(source, collector=mutations.collector(ignored=ids))`
 from cstvis.
 
-A plugin library can expose its `MutationsCollection` instance to the engine.
+## Load packs from plugins
+
+Define a pack in `example_mutations/plugin.py` in your plugin package. Use
+`@mutations.plugin` to register a function that takes no arguments and returns
+the pack.
+
+```python
+from libcst import Integer
+from mutagroup import MutationsCollection, mutations
+
+pack = MutationsCollection('N')
+
+
+@pack.mutation(1)
+def replace_integer(node: Integer) -> Integer:
+    return node.with_changes(value='0')
+
+
+@mutations.plugin
+def number_pack() -> MutationsCollection:
+    return pack
+```
+
+In the plugin package's `pyproject.toml`, add an entry point that tells Pristan
+which module to import.
+
+```toml
+[project.entry-points.pristan]
+example_mutations = 'example_mutations.plugin'
+```
+
+Run `python -m pip install .` from the plugin package's root in the Python
+environment that runs `mutagroup`. `get_mutations()` discovers the installed
+plugins and collects their packs into a supercollection.
+
+```python
+from mutagroup import MutationsSuperCollection
+
+packs = MutationsSuperCollection.get_mutations()
+changer = packs.get_changer('answer = 42')
+for coordinate in changer.iterate_coordinates():
+    print(coordinate.converter_id, changer.apply_coordinate(coordinate))
+```
