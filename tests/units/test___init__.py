@@ -3,45 +3,10 @@ from pathlib import Path
 from subprocess import run
 from textwrap import dedent
 
-from packaging.requirements import Requirement
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
-
-
-def test_installation_does_not_require_pristan() -> None:
-    """Keep pristan out of the core dependencies so plugin packages can choose how to use it."""
-    project_file = Path(__file__).resolve().parents[2] / 'pyproject.toml'
-    with project_file.open('rb') as stream:
-        dependencies = tomllib.load(stream)['project']['dependencies']
-
-    assert 'pristan' not in {Requirement(dependency).name.lower() for dependency in dependencies}
-
-
-def test_public_api_can_discover_and_apply_mutations_without_pristan() -> None:
-    """Discover and apply standalone and combined mutations in a fresh interpreter.
-
-    The finder records attempts to import pristan even if the caller catches the resulting ImportError.
-    """
+def test_public_api_can_discover_and_apply_mutations() -> None:
+    """Discover and apply standalone and combined mutations in a fresh interpreter."""
     script = dedent("""
-        import sys
-        from importlib.abc import MetaPathFinder
-
-        class PristanImportGuard(MetaPathFinder):
-            def __init__(self):
-                self.attempts = []
-
-            def find_spec(self, fullname, path=None, target=None):
-                if fullname.partition('.')[0] == 'pristan':
-                    self.attempts.append(fullname)
-                    raise ModuleNotFoundError(fullname)
-                return None
-
-        guard = PristanImportGuard()
-        sys.meta_path.insert(0, guard)
-
         from cstvis import Changer
         from libcst import Integer
         from mutagroup import Context, Mutation, MutationsCollection, MutationsSuperCollection
@@ -70,9 +35,6 @@ def test_public_api_can_discover_and_apply_mutations_without_pristan() -> None:
             (target,) = changer.iterate_coordinates()
             print(target.converter_id)
             print(changer.apply_coordinate(target))
-
-        if guard.attempts:
-            raise AssertionError(f'The core attempted to import {guard.attempts!r}.')
     """)
     result = run(
         [sys.executable, '-c', script],

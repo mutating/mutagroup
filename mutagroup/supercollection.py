@@ -15,6 +15,7 @@ from libcst.metadata import PositionProvider
 
 from mutagroup.collection import MutationsCollection
 from mutagroup.ignores import DEFAULT_METACODE_KEY, CommentIgnores, ignored_ids
+from mutagroup.slot import mutations
 
 _FilterIndex = Dict[Type[CSTNode], List[CallableWrapper[bool]]]
 
@@ -132,6 +133,10 @@ class MutationsSuperCollection:
             by_prefix[collection.prefix] = collection
         self._collections = tuple(by_prefix.values())
         self._metacode_key = metacode_key
+
+    @classmethod
+    def get_mutations(cls, metacode_key: str = 'muta') -> 'MutationsSuperCollection':
+        return cls(list(mutations().values()), metacode_key=metacode_key)
 
     def get_changer(self, source: str, *, ignored: Iterable[str] = ()) -> Changer:
         """Snapshot the packs and discover their coordinates together in this source."""
