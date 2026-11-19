@@ -1,6 +1,9 @@
+import sys
 from collections import Counter
 from dataclasses import astuple, replace
 from pathlib import Path
+from subprocess import run
+from textwrap import dedent
 from typing import (
     Any,
     Collection,
@@ -814,3 +817,103 @@ def test_supercollection_rejects_invalid_metacode_keys(key: str) -> None:
     """Reject keys that cannot be parsed as metacode identifiers."""
     with pytest.raises(ValueError, match='metacode key'):
         MutationsSuperCollection([], metacode_key=key)
+
+
+def _write_pack_plugin(directory: Path, name: str, prefix: str, number: int, replacement: str) -> None:
+    distribution = directory / f'{name}-1.0.dist-info'
+    distribution.mkdir()
+    (distribution / 'METADATA').write_text(
+        f'Metadata-Version: 2.1\nName: {name}\nVersion: 1.0\n',
+        encoding='utf-8',
+    )
+    (distribution / 'entry_points.txt').write_text(f'[pristan]\n{name} = {name}\n', encoding='utf-8')
+    (directory / f'{name}.py').write_text(
+        dedent(f"""
+            from libcst import Integer
+
+            from mutagroup import MutationsCollection, mutations
+
+            pack = MutationsCollection({prefix!r})
+
+            @pack.mutation({number})
+            def replace(node: Integer) -> Integer:
+                return node.with_changes(value={replacement!r})
+
+            @mutations.plugin({name!r})
+            def provide_pack() -> MutationsCollection:
+                return pack
+        """),
+        encoding='utf-8',
+    )
+
+
+def _run_with_plugins(directory: Path, script: str) -> None:
+    setup = dedent("""
+        import sys
+
+        sys.path.insert(0, sys.argv[1])
+
+        from mutagroup import MutationsSuperCollection
+    """)
+    result = run(
+        [sys.executable, '-c', setup + dedent(script), str(directory)],
+        cwd=Path(__file__).resolve().parents[2],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.fixture
+def two_pack_plugins(tmp_path: Path) -> Path:
+    _write_pack_plugin(tmp_path, 'mutagroup_test_first_pack', 'I', 13, '42')
+    _write_pack_plugin(tmp_path, 'mutagroup_test_second_pack', 'J', 7, '99')
+    return tmp_path
+
+
+def test_get_mutations_loads_and_applies_two_entry_point_plugins(two_pack_plugins: Path) -> None:
+    """Discover both plugin modules on demand and apply their mutations independently."""
+    _run_with_plugins(two_pack_plugins, """
+        assert 'mutagroup_test_first_pack' not in sys.modules
+        assert 'mutagroup_test_second_pack' not in sys.modules
+
+        changer = MutationsSuperCollection.get_mutations().get_changer('answer = 0')
+        applied = sorted(
+            (coordinate.converter_id, changer.apply_coordinate(coordinate))
+            for coordinate in changer.iterate_coordinates()
+        )
+        assert applied == [('I-13', 'answer = 42'), ('J-7', 'answer = 99')], applied
+    """)
+
+
+def test_get_mutations_returns_empty_supercollection_without_plugins(tmp_path: Path) -> None:
+    """Build a usable supercollection when the slot has no plugins."""
+    _run_with_plugins(tmp_path, """
+        changer = MutationsSuperCollection.get_mutations().get_changer('answer = 0')
+        assert list(changer.iterate_coordinates()) == []
+    """)
+
+
+def test_get_mutations_uses_custom_metacode_key(two_pack_plugins: Path) -> None:
+    """Use the requested comment key for the discovered mutation packs."""
+    _run_with_plugins(two_pack_plugins, """
+        source = 'answer = 0  # custom: ignore[I-13]'
+        default = MutationsSuperCollection.get_mutations().get_changer(source)
+        custom = MutationsSuperCollection.get_mutations(metacode_key='custom').get_changer(source)
+
+        assert sorted(item.converter_id for item in default.iterate_coordinates()) == ['I-13', 'J-7']
+        assert [item.converter_id for item in custom.iterate_coordinates()] == ['J-7']
+    """)
+
+
+def test_get_mutations_rejects_duplicate_prefixes(tmp_path: Path) -> None:
+    """Reject two plugins that expose packs with the same prefix."""
+    _write_pack_plugin(tmp_path, 'mutagroup_test_first_pack', 'I', 13, '42')
+    _write_pack_plugin(tmp_path, 'mutagroup_test_second_pack', 'I', 7, '99')
+    _run_with_plugins(tmp_path, """
+        import pytest
+
+        with pytest.raises(ValueError, match="prefix 'I'"):
+            MutationsSuperCollection.get_mutations()
+    """)

@@ -4,28 +4,9 @@ from subprocess import run
 from textwrap import dedent
 
 
-def test_public_api_can_discover_and_apply_mutations_without_pristan() -> None:
-    """Discover and apply standalone and combined mutations in a fresh interpreter.
-
-    The finder records attempts to import pristan even if the caller catches the resulting ImportError.
-    """
+def test_public_api_can_discover_and_apply_mutations() -> None:
+    """Discover and apply standalone and combined mutations in a fresh interpreter."""
     script = dedent("""
-        import sys
-        from importlib.abc import MetaPathFinder
-
-        class PristanImportGuard(MetaPathFinder):
-            def __init__(self):
-                self.attempts = []
-
-            def find_spec(self, fullname, path=None, target=None):
-                if fullname.partition('.')[0] == 'pristan':
-                    self.attempts.append(fullname)
-                    raise ModuleNotFoundError(fullname)
-                return None
-
-        guard = PristanImportGuard()
-        sys.meta_path.insert(0, guard)
-
         from cstvis import Changer
         from libcst import Integer
         from mutagroup import Context, Mutation, MutationsCollection, MutationsSuperCollection
@@ -54,9 +35,6 @@ def test_public_api_can_discover_and_apply_mutations_without_pristan() -> None:
             (target,) = changer.iterate_coordinates()
             print(target.converter_id)
             print(changer.apply_coordinate(target))
-
-        if guard.attempts:
-            raise AssertionError(f'The core attempted to import {guard.attempts!r}.')
     """)
     result = run(
         [sys.executable, '-c', script],
